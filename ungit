@@ -215,6 +215,16 @@ output_prompt_format() {
   echo "</files>"
 }
 
+# curl with GitHub auth when GITHUB_TOKEN/GH_TOKEN is set (private repos, higher rate limits)
+gh_curl() {
+  local token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+  if [[ -n "$token" ]]; then
+    curl -H "Authorization: Bearer $token" "$@"
+  else
+    curl "$@"
+  fi
+}
+
 # Check dependencies
 check_deps() {
   local missing=()
@@ -236,12 +246,13 @@ check_ref_exists() {
 
   # Try branches API first
   local http_code
-  http_code=$(curl -sL -o /dev/null -w "%{http_code}" \
+  http_code=$(gh_curl -sL -o /dev/null -w "%{http_code}" \
     "https://api.github.com/repos/$user/$repo/branches/$ref")
+  [[ "$http_code" == "403" ]] && error "GitHub API rate limit exceeded — set GITHUB_TOKEN to authenticate"
   [[ "$http_code" == "200" ]] && return 0
 
   # Try commits API (for SHAs and tags)
-  http_code=$(curl -sL -o /dev/null -w "%{http_code}" \
+  http_code=$(gh_curl -sL -o /dev/null -w "%{http_code}" \
     "https://api.github.com/repos/$user/$repo/commits/$ref")
   [[ "$http_code" == "200" ]] && return 0
 
@@ -349,7 +360,14 @@ parse_input() {
     USER="${BASH_REMATCH[1]}"
     REPO="${BASH_REMATCH[2]%.git}"
     PATH_IN_REPO="${BASH_REMATCH[3]}"
-    [[ -n "$branch" ]] && BRANCH="$branch" || true
+    if [[ -n "$branch" ]]; then
+      # @ also appears in filenames (icon@2x.png) — only treat as a branch if the ref exists
+      if check_ref_exists "$USER" "$REPO" "$branch"; then
+        BRANCH="$branch"
+      else
+        PATH_IN_REPO="$PATH_IN_REPO@$branch"
+      fi
+    fi
     return
   fi
 
@@ -429,11 +447,13 @@ main() {
   local tarball_url="https://api.github.com/repos/$USER/$REPO/tarball/$BRANCH"
   local tarball="$tmpdir/repo.tar.gz"
 
-  if ! curl -sL -o "$tarball" -w "%{http_code}" "$tarball_url" | grep -q "^200$"; then
+  if ! gh_curl -sL -o "$tarball" -w "%{http_code}" "$tarball_url" | grep -q "^200$"; then
     local http_code
-    http_code=$(curl -sL -o /dev/null -w "%{http_code}" "$tarball_url")
+    http_code=$(gh_curl -sL -o /dev/null -w "%{http_code}" "$tarball_url")
     if [[ "$http_code" == "404" ]]; then
       error "Repository or branch not found: $USER/$REPO (ref: $BRANCH)"
+    elif [[ "$http_code" == "403" ]]; then
+      error "GitHub API rate limit exceeded — set GITHUB_TOKEN to authenticate"
     else
       error "Failed to download from GitHub (HTTP $http_code)"
     fi

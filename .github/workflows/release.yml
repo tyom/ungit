@@ -53,9 +53,9 @@ jobs:
           git clone "https://x-access-token:${GH_TOKEN}@github.com/tyom/homebrew-tap.git" tap
           cd tap
           f=Formula/ungit.rb
-          sed -i -E "s|^  url \".*\"|  url \"${url}\"|"             "$f"
-          sed -i -E "s|^  version \".*\"|  version \"${version}\"|" "$f"
-          sed -i -E "s|^  sha256 \".*\"|  sha256 \"${sha}\"|"       "$f"
+          sed -i '' -E "s|^  url \".*\"|  url \"${url}\"|"             "$f"
+          sed -i '' -E "s|^  version \".*\"|  version \"${version}\"|" "$f"
+          sed -i '' -E "s|^  sha256 \".*\"|  sha256 \"${sha}\"|"       "$f"
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git diff --quiet || git commit -am "ungit ${version}"

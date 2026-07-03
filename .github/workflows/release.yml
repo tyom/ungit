@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  test:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Make test script executable
+        run: chmod +x test_ungit.sh
+
+      - name: Run tests
+        run: ./test_ungit.sh
+
+  release:
+    needs: test
+    runs-on: macos-latest
+    permissions:
+      contents: write # create the release and upload the asset
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Create release and attach the ungit script
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "${GITHUB_REF_NAME}" \
+            ungit \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "Install via Homebrew: \`brew install tyom/tap/ungit\`" \
+            --generate-notes
+          echo "sha256 (for the Homebrew formula):"
+          shasum -a 256 ungit
+
+      - name: Bump Homebrew tap formula
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          sha="$(shasum -a 256 ungit | awk '{print $1}')"
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/ungit"
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/tyom/homebrew-tap.git" tap
+          cd tap
+          f=Formula/ungit.rb
+          sed -i -E "s|^  url \".*\"|  url \"${url}\"|"             "$f"
+          sed -i -E "s|^  version \".*\"|  version \"${version}\"|" "$f"
+          sed -i -E "s|^  sha256 \".*\"|  sha256 \"${sha}\"|"       "$f"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git diff --quiet || git commit -am "ungit ${version}"
+          git push

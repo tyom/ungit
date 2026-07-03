@@ -44,9 +44,9 @@ Formats:
     ungit git@github.com:user/repo                        # Whole repo
     ungit git@github.com:user/repo.git@branch             # Specific branch
 
-  GitHub tree URL (for directories/files):
-    ungit https://github.com/user/repo/tree/branch/path
+  GitHub tree/blob URL (for directories/files):
     ungit https://github.com/user/repo/tree/main/src
+    ungit https://github.com/user/repo/blob/main/src/file.txt
     ungit https://github.com/user/repo/tree/abc123/path   # Permalink
 
 Examples:
@@ -215,13 +215,20 @@ output_prompt_format() {
   echo "</files>"
 }
 
-# curl with GitHub auth when GITHUB_TOKEN/GH_TOKEN is set (private repos, higher rate limits)
+# curl with GitHub auth (private repos, higher rate limits)
 gh_curl() {
-  local token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
-  if [[ -n "$token" ]]; then
-    curl -H "Authorization: Bearer $token" "$@"
+  if [[ -n "${AUTH_TOKEN:-}" ]]; then
+    curl -H "Authorization: Bearer $AUTH_TOKEN" "$@"
   else
     curl "$@"
+  fi
+}
+
+# Resolve auth token: env var first, then the gh CLI session if logged in
+resolve_auth_token() {
+  AUTH_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+  if [[ -z "$AUTH_TOKEN" ]] && command -v gh &>/dev/null; then
+    AUTH_TOKEN=$(gh auth token 2>/dev/null || true)
   fi
 }
 
@@ -315,12 +322,12 @@ parse_input() {
   BRANCH="HEAD"
   PATH_IN_REPO=""
 
-  # GitHub tree URL: https://github.com/user/repo/tree/ref-and-path
+  # GitHub tree/blob URL: https://github.com/user/repo/tree/ref-and-path
   # Branch names can contain slashes, so we need to resolve them via API
-  if [[ "$input" =~ ^https?://github\.com/([^/]+)/([^/]+)/tree/(.+)$ ]]; then
+  if [[ "$input" =~ ^https?://github\.com/([^/]+)/([^/]+)/(tree|blob)/(.+)$ ]]; then
     OWNER="${BASH_REMATCH[1]}"
     REPO="${BASH_REMATCH[2]%.git}"
-    local ref_and_path="${BASH_REMATCH[3]}"
+    local ref_and_path="${BASH_REMATCH[4]}"
     resolve_branch_and_path "$OWNER" "$REPO" "$ref_and_path"
     return
   fi
@@ -378,7 +385,8 @@ Supported formats:
   user/repo/path[@branch]
   https://github.com/user/repo[.git][@branch]
   git@github.com:user/repo[.git][@branch]
-  https://github.com/user/repo/tree/branch/path"
+  https://github.com/user/repo/tree/branch/path
+  https://github.com/user/repo/blob/branch/file"
 }
 
 main() {
@@ -426,6 +434,7 @@ main() {
   [[ "${2:-}" == -* ]] && error "Options must come before the source: ${2}"
 
   check_deps
+  resolve_auth_token
   parse_input "$1"
 
   # Determine destination/base name

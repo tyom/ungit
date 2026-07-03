@@ -17,6 +17,12 @@ curl -o ungit https://raw.githubusercontent.com/tyom/ungit/main/ungit
 chmod +x ungit && mv ungit /usr/local/bin/
 ```
 
+## Private repos
+
+Authentication is picked up automatically: `GITHUB_TOKEN` or `GH_TOKEN` if
+set, otherwise the [`gh` CLI](https://cli.github.com) session if you're
+logged in (`gh auth login`). This also raises API rate limits.
+
 ## Usage
 
 ```

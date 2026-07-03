@@ -121,7 +121,7 @@ generate_tree() {
   while IFS= read -r entry; do
     local name
     name=$(basename "$entry")
-    local rel_path="${entry#$root_path/}"
+    local rel_path="${entry#"$root_path"/}"
 
     if [[ -d "$entry" ]]; then
       # For directories, check if any files inside would match
@@ -130,7 +130,7 @@ generate_tree() {
         has_matching_files=true
       else
         while IFS= read -r subfile; do
-          local sub_rel="${subfile#$root_path/}"
+          local sub_rel="${subfile#"$root_path"/}"
           if matches_filter "$sub_rel"; then
             has_matching_files=true
             break
@@ -162,7 +162,7 @@ output_prompt_format() {
   else
     local file_basename
     file_basename=$(basename "$source_path")
-    if matches_filter "$file_basename"; then
+    if matches_filter "${PATH_IN_REPO:-$file_basename}"; then
       echo "$base_name"
     fi
   fi
@@ -172,7 +172,7 @@ output_prompt_format() {
 
   if [[ -d "$source_path" ]]; then
     while IFS= read -r file; do
-      local rel_path="${file#$source_path/}"
+      local rel_path="${file#"$source_path"/}"
       local full_rel_path="${base_name}/${rel_path}"
 
       # Apply filter
@@ -196,7 +196,7 @@ output_prompt_format() {
     local file_basename
     file_basename=$(basename "$source_path")
 
-    if matches_filter "$file_basename"; then
+    if matches_filter "${PATH_IN_REPO:-$file_basename}"; then
       local file_size
       file_size=$(stat -f%z "$source_path" 2>/dev/null || stat -c%s "$source_path" 2>/dev/null)
 
@@ -228,7 +228,7 @@ gh_curl() {
 # Check dependencies
 check_deps() {
   local missing=()
-  for cmd in curl tar; do
+  for cmd in curl tar file; do
     if ! command -v "$cmd" &>/dev/null; then
       missing+=("$cmd")
     fi
@@ -305,12 +305,12 @@ resolve_branch_and_path() {
   return 0
 }
 
-# Parse input and set USER, REPO, BRANCH, PATH_IN_REPO
+# Parse input and set OWNER, REPO, BRANCH, PATH_IN_REPO
 parse_input() {
   local input="$1"
   local branch=""
 
-  USER=""
+  OWNER=""
   REPO=""
   BRANCH="HEAD"
   PATH_IN_REPO=""
@@ -318,10 +318,10 @@ parse_input() {
   # GitHub tree URL: https://github.com/user/repo/tree/ref-and-path
   # Branch names can contain slashes, so we need to resolve them via API
   if [[ "$input" =~ ^https?://github\.com/([^/]+)/([^/]+)/tree/(.+)$ ]]; then
-    USER="${BASH_REMATCH[1]}"
+    OWNER="${BASH_REMATCH[1]}"
     REPO="${BASH_REMATCH[2]%.git}"
     local ref_and_path="${BASH_REMATCH[3]}"
-    resolve_branch_and_path "$USER" "$REPO" "$ref_and_path"
+    resolve_branch_and_path "$OWNER" "$REPO" "$ref_and_path"
     return
   fi
 
@@ -333,7 +333,7 @@ parse_input() {
 
   # HTTPS URL: https://github.com/user/repo[.git]
   if [[ "$input" =~ ^https?://github\.com/([^/]+)/([^/]+)/?$ ]]; then
-    USER="${BASH_REMATCH[1]}"
+    OWNER="${BASH_REMATCH[1]}"
     REPO="${BASH_REMATCH[2]%.git}"
     [[ -n "$branch" ]] && BRANCH="$branch" || true
     return
@@ -341,7 +341,7 @@ parse_input() {
 
   # SSH format: git@github.com:user/repo[.git]
   if [[ "$input" =~ ^git@github\.com:([^/]+)/([^/]+)/?$ ]]; then
-    USER="${BASH_REMATCH[1]}"
+    OWNER="${BASH_REMATCH[1]}"
     REPO="${BASH_REMATCH[2]%.git}"
     [[ -n "$branch" ]] && BRANCH="$branch" || true
     return
@@ -349,7 +349,7 @@ parse_input() {
 
   # Shorthand: user/repo
   if [[ "$input" =~ ^([^/]+)/([^/]+)$ ]]; then
-    USER="${BASH_REMATCH[1]}"
+    OWNER="${BASH_REMATCH[1]}"
     REPO="${BASH_REMATCH[2]%.git}"
     [[ -n "$branch" ]] && BRANCH="$branch" || true
     return
@@ -357,12 +357,12 @@ parse_input() {
 
   # Shorthand with path: user/repo/path/to/dir
   if [[ "$input" =~ ^([^/]+)/([^/]+)/(.+)$ ]]; then
-    USER="${BASH_REMATCH[1]}"
+    OWNER="${BASH_REMATCH[1]}"
     REPO="${BASH_REMATCH[2]%.git}"
     PATH_IN_REPO="${BASH_REMATCH[3]}"
     if [[ -n "$branch" ]]; then
       # @ also appears in filenames (icon@2x.png) — only treat as a branch if the ref exists
-      if check_ref_exists "$USER" "$REPO" "$branch"; then
+      if check_ref_exists "$OWNER" "$REPO" "$branch"; then
         BRANCH="$branch"
       else
         PATH_IN_REPO="$PATH_IN_REPO@$branch"
@@ -409,6 +409,9 @@ main() {
         print_usage
         exit 0
         ;;
+      -*)
+        error "Unknown option: $1"
+        ;;
       *)
         break
         ;;
@@ -419,6 +422,8 @@ main() {
     print_usage
     exit 0
   fi
+
+  [[ "${2:-}" == -* ]] && error "Options must come before the source: ${2}"
 
   check_deps
   parse_input "$1"
@@ -434,7 +439,7 @@ main() {
   fi
 
   # Display what we're fetching (skip in prompt mode for clean output)
-  local fetch_desc="$USER/$REPO"
+  local fetch_desc="$OWNER/$REPO"
   [[ -n "$PATH_IN_REPO" ]] && fetch_desc="$fetch_desc/$PATH_IN_REPO"
   [[ "$prompt_mode" != true ]] && info "Fetching $fetch_desc (ref: $BRANCH)..."
 
@@ -444,14 +449,14 @@ main() {
   local tmpdir="$UNGIT_TMPDIR"
 
   # Download the tarball
-  local tarball_url="https://api.github.com/repos/$USER/$REPO/tarball/$BRANCH"
+  local tarball_url="https://api.github.com/repos/$OWNER/$REPO/tarball/$BRANCH"
   local tarball="$tmpdir/repo.tar.gz"
 
   if ! gh_curl -sL -o "$tarball" -w "%{http_code}" "$tarball_url" | grep -q "^200$"; then
     local http_code
     http_code=$(gh_curl -sL -o /dev/null -w "%{http_code}" "$tarball_url")
     if [[ "$http_code" == "404" ]]; then
-      error "Repository or branch not found: $USER/$REPO (ref: $BRANCH)"
+      error "Repository or branch not found: $OWNER/$REPO (ref: $BRANCH)"
     elif [[ "$http_code" == "403" ]]; then
       error "GitHub API rate limit exceeded — set GITHUB_TOKEN to authenticate"
     else
@@ -464,7 +469,7 @@ main() {
 
   # Find the extracted directory (GitHub adds a prefix like user-repo-hash)
   local extracted_dir
-  extracted_dir=$(find "$tmpdir" -maxdepth 1 -type d -name "$USER-$REPO-*" | head -1)
+  extracted_dir=$(find "$tmpdir" -maxdepth 1 -type d -name "$OWNER-$REPO-*" | head -1)
 
   if [[ -z "$extracted_dir" ]]; then
     error "Failed to extract repository archive"
@@ -489,7 +494,7 @@ main() {
       if [[ ${#INCLUDE_PATTERNS[@]} -gt 0 || ${#EXCLUDE_PATTERNS[@]} -gt 0 ]]; then
         local file_count=0
         while IFS= read -r file; do
-          local rel_path="${file#$source_path/}"
+          local rel_path="${file#"$source_path"/}"
           matches_filter "$rel_path" || continue
 
           local dest_file="$dest/$rel_path"
@@ -505,7 +510,7 @@ main() {
     else
       local file_basename
       file_basename=$(basename "$source_path")
-      if ! matches_filter "$file_basename"; then
+      if ! matches_filter "${PATH_IN_REPO:-$file_basename}"; then
         error "File excluded by filter: $file_basename"
       fi
 

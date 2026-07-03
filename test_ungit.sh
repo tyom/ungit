@@ -24,6 +24,8 @@ check "--help"         "Download a repository" "$($UNGIT --help)"
 check "no args = help" "Usage: ungit"          "$($UNGIT)"
 check "bad format"     "Invalid format"        "$($UNGIT 'not a repo' 2>&1 || true)"
 check "missing -i arg" "requires a pattern"    "$($UNGIT -i 2>&1 || true)"
+check "unknown option" "Unknown option"        "$($UNGIT -x user/repo 2>&1 || true)"
+check "flag after src" "Options must come"     "$($UNGIT user/repo -p 2>&1 || true)"
 
 echo "passed: $pass, failed: $fail"
 [[ $fail -eq 0 ]]
